@@ -66,6 +66,8 @@ In raw mode, each file in `OBSIDIAN_VAULT_PATH/_raw/` (or `OBSIDIAN_RAW_DIR`) is
 
 **Deletion safety:** Only delete the specific file that was just promoted. Before deleting, verify the resolved path is inside `$OBSIDIAN_VAULT_PATH/_raw/` — never delete files outside this directory. Never use wildcards or recursive deletion (`rm -rf`, `rm *`). Delete one file at a time by its exact path.
 
+**Read-only sources override:** If `OBSIDIAN_SOURCES_READONLY` is set to `true` in `.env` (or `~/.obsidian-wiki/config`), **never delete any source file**, regardless of ingest mode. Skip the deletion step entirely. The manifest tracks what has been processed — duplicate processing is prevented by the manifest's content hash, not by file deletion. This flag exists to protect immutable source directories (e.g., synced handwritten notes from external devices) where the files must never be modified or removed by the wiki agent.
+
 ## The Ingest Process
 
 ### Step 1: Read the Source
