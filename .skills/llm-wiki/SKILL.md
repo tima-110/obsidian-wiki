@@ -164,6 +164,10 @@ relationships:
     type: extends
 sources: [papers/attention.pdf]
 summary: One or two sentences, ≤200 chars, so a reader (or another skill) can preview this page without opening it.
+# people/ pages only — the entity (org/dept) this person belongs to:
+# entity: "[[entities/ssl-labs]]"
+# programs/ pages only — the entities this program involves (list):
+# entities: ["[[entities/ssl-labs]]", "[[entities/ptd]]"]
 provenance:
   extracted: 0.72
   inferred: 0.25

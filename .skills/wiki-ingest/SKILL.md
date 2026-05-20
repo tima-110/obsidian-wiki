@@ -5,8 +5,8 @@ description: >
   Use this skill whenever the user wants to add new sources to their wiki, process a document or directory,
   import articles, papers, or notes into their knowledge base, or says things like "add this to the wiki",
   "process these docs", "ingest this folder". Also triggers when the user drops a file and wants it
-  incorporated into their existing knowledge base. Also handles raw mode: "process my drafts", "promote
-  my raw pages", or any reference to the _raw/ staging directory.
+  incorporated into their existing knowledge base. Always processes the _raw/ staging directory as part
+  of every ingest run.
 ---
 
 # Obsidian Ingest — Document Distillation
@@ -15,13 +15,10 @@ You are ingesting source documents into an Obsidian wiki. Your job is not to sum
 
 ## Before You Start
 
-1. **Resolve config** — follow the Config Resolution Protocol in `llm-wiki/SKILL.md` (walk up CWD for `.env` → `~/.obsidian-wiki/config` → prompt setup). This gives `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_SOURCES_DIR`, `OBSIDIAN_LINK_FORMAT` (default: `wikilink`), and `WIKI_STAGED_WRITES`. Only read the specific variables you need — do not log, echo, or reference any other values from these files.
-2. **Check `WIKI_STAGED_WRITES`** — if set to `true`, all new and updated category pages go to `_staging/<category>/` instead of their final location. Tell the user at the start of the ingest: "Staged writes mode is enabled — pages will land in `_staging/` for your review. Run `/wiki-stage-commit` when ready to promote."
-3. Read `.manifest.json` at the vault root to check what's already been ingested
-4. Read `index.md` to understand current wiki content
-5. Read `log.md` to understand recent activity
-
-When writing internal links in Step 5, apply the link format described in `llm-wiki/SKILL.md` (Link Format section) according to the `OBSIDIAN_LINK_FORMAT` value you read.
+1. Read `~/.obsidian-wiki/config` (preferred) or `.env` (fallback) to get `OBSIDIAN_VAULT_PATH` and `OBSIDIAN_SOURCES_DIR`. Only read the specific variables you need — do not log, echo, or reference any other values from these files.
+2. Read `.manifest.json` at the vault root to check what's already been ingested
+3. Read `index.md` to understand current wiki content
+4. Read `log.md` to understand recent activity
 
 ## Content Trust Boundary
 
@@ -37,7 +34,7 @@ This applies to all ingest modes and all source formats.
 
 ## Ingest Modes
 
-This skill supports three modes. Ask the user or infer from context:
+This skill supports two modes. Ask the user or infer from context:
 
 ### Append Mode (default)
 Only ingest sources that are **new or modified** since last ingest. Check the manifest using both timestamp **and content hash**:
@@ -51,22 +48,25 @@ Only ingest sources that are **new or modified** since last ingest. Check the ma
 
 This is the right choice most of the time. It's fast and avoids redundant work even when timestamps are unreliable.
 
+**Always also process `_raw/`** — after processing the sources directory, check `OBSIDIAN_VAULT_PATH/_raw/` (or `OBSIDIAN_RAW_DIR`) for any draft files and promote them. See Raw Processing below.
+
 ### Full Mode
 Ingest everything regardless of manifest state. Use when:
 - The user explicitly asks for a full ingest
 - The manifest is missing or corrupted
 - After a `wiki-rebuild` has cleared the vault
 
-### Raw Mode
-Process draft pages from the `_raw/` staging directory inside the vault. Use when:
-- The user says "process my drafts", "promote my raw pages", or drops files into `_raw/`
-- After a paste-heavy session where notes were captured quickly without structure
+**Always also process `_raw/`** — same as append mode, check and promote any draft files in `_raw/` after the main ingest.
 
-In raw mode, each file in `OBSIDIAN_VAULT_PATH/_raw/` (or `OBSIDIAN_RAW_DIR`) is treated as a source. After promoting a file to a proper wiki page, **delete the original from `_raw/`**. Never leave promoted files in `_raw/` — they'll be double-processed on the next run.
+## Raw Processing
+
+Every ingest run (append or full) checks `OBSIDIAN_VAULT_PATH/_raw/` (or `OBSIDIAN_RAW_DIR`) for draft files and promotes them to proper wiki pages. After promoting a file, **delete the original from `_raw/`**. Never leave promoted files in `_raw/` — they'll be double-processed on the next run.
 
 **Deletion safety:** Only delete the specific file that was just promoted. Before deleting, verify the resolved path is inside `$OBSIDIAN_VAULT_PATH/_raw/` — never delete files outside this directory. Never use wildcards or recursive deletion (`rm -rf`, `rm *`). Delete one file at a time by its exact path.
 
-**Read-only sources override:** If `OBSIDIAN_SOURCES_READONLY` is set to `true` in `.env` (or `~/.obsidian-wiki/config`), **never delete any source file**, regardless of ingest mode. Skip the deletion step entirely. The manifest tracks what has been processed — duplicate processing is prevented by the manifest's content hash, not by file deletion. This flag exists to protect immutable source directories (e.g., synced handwritten notes from external devices) where the files must never be modified or removed by the wiki agent.
+**Source directory is always read-only:** Never modify, delete, move, or rename any file under `OBSIDIAN_SOURCES_DIR`. Those are immutable source of truth files (e.g., synced handwritten notes from reMarkable). The manifest tracks what has been processed from sources — duplicate processing is prevented by the manifest's content hash, not by file deletion. This protection applies regardless of any environment flags.
+
+**`_raw/` is always a staging area:** Always delete files from `_raw/` after successful promotion. This directory exists to receive incoming files that should be processed once and removed. If a file in `_raw/` cannot be processed (unsupported format, read error), leave it in place and log a warning.
 
 ## The Ingest Process
 
@@ -75,8 +75,10 @@ In raw mode, each file in `OBSIDIAN_VAULT_PATH/_raw/` (or `OBSIDIAN_RAW_DIR`) is
 Read the document(s) the user wants to ingest. In append mode, skip files the manifest says are already ingested and unchanged. Supported formats:
 - Markdown (`.md`) — read directly
 - Text (`.txt`) — read directly
-- PDF (`.pdf`) — use the Read tool with page ranges
+- PDF (`.pdf`) — use the Read tool with page ranges, or invoke `/document-skills:pdf` for complex layouts
 - Web clippings — markdown files from Obsidian Web Clipper
+- **Word** (`.docx`, `.docm`) — invoke the `/document-skills:docx` skill to extract content. Pass the file path and ask for markdown extraction of all text, headings, and tables.
+- **PowerPoint** (`.pptx`) — invoke the `/document-skills:pptx` skill to extract content. Pass the file path and ask for markdown extraction of slide text, speaker notes, and structure.
 - **Images** (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`) — *requires a vision-capable model*. Use the Read tool, which renders the image into your context. Treat screenshots, whiteboard photos, diagrams, and slide captures as first-class sources. If your model doesn't support vision, skip image sources and tell the user which files were skipped so they can re-run with a vision-capable model.
 
 Note the source path — you'll need it for provenance tracking.
@@ -104,15 +106,6 @@ When `QMD_PAPERS_COLLECTION` is set:
 
 Before extracting knowledge from a document, check whether related papers are already indexed that could enrich the page you're about to write:
 
-Choose the QMD transport from `$QMD_TRANSPORT`:
-
-- `mcp` (default): use the QMD MCP tool configured in the agent.
-- `cli`: run the local qmd CLI. Use `$QMD_CLI` if set; otherwise use `qmd`.
-
-If the selected transport is unavailable (no MCP tool, `qmd` not on PATH, or the command errors), skip QMD and continue with Step 2.
-
-For MCP transport:
-
 ```
 mcp__qmd__query:
   collection: <QMD_PAPERS_COLLECTION>   # e.g. "papers"
@@ -123,23 +116,6 @@ mcp__qmd__query:
     - type: lex    # keyword — finds papers citing the same methods, tools, or authors
       query: <key terms, author names, method names from the source>
 ```
-
-For CLI transport, pick the command from `$QMD_CLI_SEARCH_MODE`:
-
-- `quality` (default): best relevance; slower on CPU.
-  ```bash
-  ${QMD_CLI:-qmd} query $'vec: <topic or thesis of the source>\nlex: <key terms, author names, method names>' -c "$QMD_PAPERS_COLLECTION" -n 8 --files
-  ```
-- `balanced`: hybrid search without LLM reranking; use when `quality` is too slow.
-  ```bash
-  ${QMD_CLI:-qmd} query $'vec: <topic or thesis of the source>\nlex: <key terms, author names, method names>' -c "$QMD_PAPERS_COLLECTION" -n 8 --no-rerank --files
-  ```
-- `fast`: semantic-only source discovery.
-  ```bash
-  ${QMD_CLI:-qmd} vsearch "<topic or thesis of the source>" -c "$QMD_PAPERS_COLLECTION" -n 8 --files
-  ```
-
-Use `${QMD_CLI:-qmd} get "#docid"` to retrieve a ranked source by docid when CLI output provides one.
 
 Use the returned snippets to:
 1. **Surface related papers** you may not have thought to link — add them as cross-references in the wiki page
@@ -158,7 +134,7 @@ From the source, identify:
 - **Key concepts** that deserve their own page or belong on an existing one
 - **Entities** (people, tools, projects, organizations) mentioned
 - **Claims** that can be attributed to the source
-- **Relationships** between concepts — note the *type* when the source text makes it clear. Use the allowed types from `llm-wiki/SKILL.md` (Typed Relationships section): `extends`, `implements`, `contradicts`, `derived_from`, `uses`, `replaces`, `related_to`. Record: source page, target page, inferred type.
+- **Relationships** between concepts (what connects to what)
 - **Open questions** the source raises but doesn't answer
 
 **Track provenance per claim as you go.** For each claim you extract, mentally tag it as:
@@ -177,55 +153,54 @@ If the source belongs to a specific project:
 
 If the source is not project-specific, put everything in global categories.
 
+### Step 3b: Check the Registry Before Categorizing
+
+**Before deciding any page's category, read `_meta/registry.md`.**
+
+If the subject matches a registry entry (by Subject name or any Alias, case-insensitive):
+- Use the registry's Category and Page path — do not override with ingest heuristics
+- Update the existing page rather than creating a new one
+
+If the subject is NOT in the registry:
+- Use the category placement guide below
+- Tag the new page `inbox` in frontmatter so the user can review the classification
+- After the user approves it, they will add it to the registry and remove the `inbox` tag
+
+**Category placement guide:**
+- `entities/` — organizations, companies, departments (things made of people: BCG, PTD, SSL Labs)
+- `systems/` — software platforms, infrastructure, networks (things you log into or configure: Veeva, MCN, Palantir)
+- `programs/` — named initiatives, time-boxed projects, strategic programs (things with a sponsor and goal: DAC, Cyber Security Project, PI Renewal)
+- `concepts/` — frameworks, architectures, strategies, patterns (ideas: GDP Lakehouse, MSP Governance)
+- `decisions/` — documented choices with rationale
+- `people/` — individuals (see people matching rules in Step 5)
+- `journal/` — time-stamped meeting notes and entries
+- `synthesis/` — cross-topic summaries
+- `action-items/` — open tasks
+
 ### Step 4: Plan Updates
 
 Before writing anything, plan which pages to update or create. Aim for 10-15 pages per ingest. For each:
 - Does this page already exist? (Check `index.md` and use Glob to search `OBSIDIAN_VAULT_PATH`)
 - If it exists, what new information does this source add?
-- If it's new, which category does it belong in?
+- If it's new, which category does it belong in? (Use Step 3b registry check first)
 - What `[[wikilinks]]` should connect it to existing pages?
-
-**Apply tier-aware filtering to existing pages** (see `llm-wiki/SKILL.md`, Importance Tiering section):
-
-| Tier | Update decision |
-|---|---|
-| `core` | Always update if the source is even marginally relevant to this page |
-| `supporting` *(default)* | Update only when the source has clear new claims for this page |
-| `peripheral` | Skip unless this source is *primarily* about this specific topic |
-
-Pages without a `tier:` field are treated as `supporting`. When in doubt, err toward updating — the tier is a cost-control hint, not a hard lock.
 
 ### Step 5: Write/Update Pages
 
 For each page in your plan:
 
-**If `WIKI_STAGED_WRITES=true`, apply the staging rules below before writing anything:**
+**For `people/` pages specifically:** Before creating a new person page, search existing `people/` pages for a matching `aliases:` or `title:` field (case-insensitive). Check the full name and any constituent first name. If a match is found — including when an email surfaces a full name (e.g., "Seb Lastname") that matches an existing first-name-only page (`seb.md` with `aliases: [Seb]`) — update the existing page instead of creating a new one. This prevents duplicate person pages when email sources introduce full names for people already known by first name only.
 
-- **New pages** go to `_staging/<category>/page.md` instead of `<category>/page.md`. The page content is identical to what it would be in the live wiki — only the location differs.
-- **Updates to existing pages** go to `_staging/<category>/page.patch.md`. The patch file format:
-  ```markdown
-  ---
-  title: <same as target page>
-  patch_target: <category>/page.md
-  ingested_at: <ISO timestamp>
-  source: <source path>
-  ---
-  # Proposed Update: <page title>
+When creating or updating a `people/` page, populate the `entity:` frontmatter field with a wikilink to the entity (org/dept) this person belongs to (e.g. `entity: "[[entities/ssl-labs]]"`). Derive this from `_meta/stakeholders.md` (use the group heading the person falls under) or from context in the source. If a `department:` field already exists on the page, **replace it** with `entity:` — do not keep both. If the entity cannot be determined, omit the field rather than guess.
 
-  ## Additions
-  <new paragraphs/bullets to merge into the page>
+**For `programs/` pages specifically:** When creating or updating a `programs/` page, populate the `entities:` frontmatter field as a YAML list of wikilinks for every entity the program involves (e.g. `entities: ["[[entities/ssl-labs]]", "[[entities/ptd]]"]`). Derive this from context in the source and the stakeholder registry. If no entity relationship is clear, omit the field.
 
-  ## Deletions
-  <lines to remove, verbatim from current page>
+**For `entities/` pages specifically:** When creating or updating an `entities/` page for an internal Biogen org or department, populate these hierarchy fields if known:
+- `part_of:` — wikilink to the parent entity (e.g. `"[[entities/po-and-t-it]]"` for Manufacturing IT)
+- `supports:` — wikilink or YAML list of wikilinks to the business functions this IT entity serves (IT orgs only; e.g. `["[[entities/gmto]]", "[[entities/gets]]"]`)
+- `led_by:` — wikilink to the person leading this entity (e.g. `"[[people/eric-winrow]]"`), or plain text if no `people/` page exists yet
 
-  ## Updated Fields
-  updated: <new ISO timestamp>
-  sources: [<new source added>]
-  ```
-- `index.md` and `log.md` are always updated immediately (low-risk tracking files). `hot.md` notes that staged writes are pending.
-- When writing staged pages, use the path `_staging/<category>/` — create the directory if it doesn't exist.
-
-**If `WIKI_STAGED_WRITES` is not set or is `false` (default):**
+Omit fields that cannot be determined rather than guessing. Do not add these fields to external vendor or partner entities (BCG, TCS, Deloitte, etc.).
 
 **If creating a new page:**
 - Use the page template from the llm-wiki skill (frontmatter + sections)
@@ -240,33 +215,7 @@ For each page in your plan:
 - Add the new source to the `sources` list
 - Resolve any contradictions between old and new information (note them if unresolvable)
 
-**Populate `relationships:` when context is clear** — if Step 2 identified typed relationships between this page and another, add a `relationships:` block to the frontmatter (defined in `llm-wiki/SKILL.md`, Typed Relationships section). Only add entries where the source text makes the direction and type unambiguous. When in doubt, use `related_to` or omit the block. Example:
-
-```yaml
-relationships:
-  - target: "[[concepts/attention-mechanism]]"
-    type: uses
-  - target: "[[concepts/lstm]]"
-    type: contradicts
-```
-
 **Write a `summary:` frontmatter field** on every new page (1–2 sentences, ≤200 characters) answering "what is this page about?" for a reader who hasn't opened it. When updating an existing page whose meaning has shifted, rewrite the summary to match the new content. This field is what `wiki-query`'s cheap retrieval path reads — a missing or stale summary forces expensive full-page reads.
-
-**Add confidence and lifecycle fields** to every new page's frontmatter:
-
-```yaml
-base_confidence: <computed>   # [0.0, 1.0] — see llm-wiki/SKILL.md Confidence formula
-lifecycle: draft
-lifecycle_changed: "<ISO date today>"
-tier: supporting              # default for new pages; promote to core when ≥5 incoming links
-```
-
-Compute `base_confidence` using the formula from `llm-wiki/SKILL.md` (Confidence and Lifecycle section):
-- Count distinct source_ids for this page
-- Classify each source's quality bucket
-- `base_confidence = min(N/3, 1.0) × 0.5 + avg_quality × 0.5`
-
-When **updating** an existing page, recompute `base_confidence` only if sources changed materially (source added or removed). Do not rewrite it on every update — this avoids git churn. Leave `lifecycle` unchanged on update; only the human editor promotes lifecycle state.
 
 **Apply a `visibility/` tag** if the content clearly warrants one (optional):
 - `visibility/internal` — architecture internals, system credentials patterns, team-only context
@@ -313,60 +262,6 @@ If the manifest doesn't exist yet, create it with `version: 1`.
 - [TIMESTAMP] INGEST source="path/to/source" pages_updated=N pages_created=M mode=append|full
 ```
 
-**`hot.md`** — Read `$OBSIDIAN_VAULT_PATH/hot.md` (create from template below if missing). Rewrite the **Recent Activity** section to reflect what you just ingested — keep it to the last 3 operations max. Update **Key Takeaways** and **Active Threads** if the content materially shifted them. Update the `updated` timestamp.
-
-Write the *conceptual* change, not a file list. Example: "Ingested Fowler's microservices article — 3 new concept pages on service decomposition, API gateway, bounded contexts."
-
-hot.md template (use if the file doesn't exist):
-```markdown
----
-title: Hot Cache
-updated: TIMESTAMP
----
-## Recent Activity
-## Active Threads
-## Key Takeaways
-## Flagged Contradictions
-```
-
-### Step 8: Refresh QMD Wiki Index (optional — requires `QMD_WIKI_COLLECTION`)
-
-**GUARD: If `$QMD_WIKI_COLLECTION` is empty or unset, skip this step.** The markdown vault is still the source of truth; QMD is a search index.
-
-Run this step only after pages and special files have been written. If the source was skipped because manifest hash matched, do not refresh QMD.
-
-This refresh currently requires the local QMD CLI. Use `$QMD_CLI` if set; otherwise use `qmd`. If the CLI is unavailable or returns an error, do not roll back the wiki ingest; report that the wiki was updated but QMD refresh was skipped or failed.
-
-For CLI refresh:
-
-```bash
-${QMD_CLI:-qmd} update
-```
-
-If the output says new hashes need vectors, or if pages were created/updated and embeddings may be stale, run:
-
-```bash
-${QMD_CLI:-qmd} embed
-```
-
-Verify at least one created or materially updated page is visible in the wiki collection:
-
-```bash
-${QMD_CLI:-qmd} get "qmd://$QMD_WIKI_COLLECTION/projects/<project>/<category>/<page>.md" -l 5
-```
-
-If the exact `qmd://` path is uncertain, use:
-
-```bash
-${QMD_CLI:-qmd} ls "$QMD_WIKI_COLLECTION" | grep "<page-slug>"
-```
-
-Record QMD refresh in the final report as one of:
-- `QMD refreshed: update + embed + verified`
-- `QMD skipped: QMD_WIKI_COLLECTION unset`
-- `QMD skipped: qmd CLI unavailable`
-- `QMD failed: <short error summary>`
-
 ## Handling Multiple Sources
 
 When ingesting a directory, process sources one at a time but maintain a running awareness of the full batch. Later sources may strengthen or contradict earlier ones — that's fine, just update pages as you go.
@@ -382,10 +277,6 @@ After ingesting, verify:
 - [ ] Source attribution is present for every new claim
 - [ ] Inferred and ambiguous claims are marked with `^[inferred]` / `^[ambiguous]`; `provenance:` frontmatter block is present on new and updated pages
 - [ ] Every new/updated page has a `summary:` frontmatter field (1–2 sentences, ≤200 chars)
-- [ ] `relationships:` block is present on pages where source text made typed connections clear; all entries use an allowed type from `llm-wiki/SKILL.md`
-- [ ] If `QMD_WIKI_COLLECTION` is set and the QMD CLI is available, `qmd update` has run after writing pages
-- [ ] If QMD reports missing vectors or embeddings may be stale, `qmd embed` has run
-- [ ] QMD refresh status is included in the final report
 
 ## Reference
 

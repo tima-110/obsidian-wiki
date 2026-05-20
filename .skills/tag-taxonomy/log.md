@@ -1,0 +1,1 @@
+- [2026-05-16T21:02:33Z] TAG_NORMALIZE tags_renamed=11_aliases pages_modified=18 new_tags_added=6 (strategic-planning, it-strategy, it-operations, lab-systems, data-strategy, it-management aliases added to taxonomy; aliases normalized on 18 modifiable pages)

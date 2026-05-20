@@ -66,6 +66,7 @@ For each page in the vault:
 - **Prefer the shortest unambiguous wikilink path** — use `[[page-name]]` not `[[full/path/to/page-name]]` when the name is unique across the vault
 - **Don't link inside code blocks** or frontmatter
 - **Don't double-link** — if `[[foo]]` already appears on the page, don't add another
+- **Never escape the pipe in wikilinks** — `[[path|alias]]` is correct; `[[path\|alias]]` is wrong and breaks Obsidian rendering
 
 ## Step 3: Score and Rank Suggestions
 
@@ -114,6 +115,8 @@ This project uses [[concepts/knowledge-graphs|knowledge graphs]] to connect enti
 ```
 
 Use the `[[path|display text]]` format when the wikilink path differs from the display text.
+
+> **CRITICAL:** Never escape the pipe character. Write `[[path|alias]]`, NOT `[[path\|alias]]`. The backslash is wrong and breaks the wikilink in Obsidian. The `|` inside `[[...]]` is NOT a Markdown table separator and must never be escaped.
 
 ### 4b: Related section (fallback)
 
